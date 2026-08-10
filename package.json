@@ -1,0 +1,31 @@
+{
+  "name": "slackbot",
+  "version": "0.1.0",
+  "description": "Modular Slack bot. Ships with a standup/daily-check-in module (dailybot replacement).",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@slack/bolt": "^3.22.0",
+    "better-sqlite3": "^13.0.3",
+    "dotenv": "^16.4.5",
+    "luxon": "^3.5.0",
+    "pino": "^9.5.0",
+    "pino-pretty": "^11.3.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.11",
+    "@types/luxon": "^3.4.2",
+    "@types/node": "^22.10.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}

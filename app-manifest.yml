@@ -1,0 +1,41 @@
+display_information:
+  name: Standup Bot
+  description: Modular Slack bot. Sends daily standup prompts and posts replies to a channel.
+  background_color: "#2c2d30"
+features:
+  bot_user:
+    display_name: standup-bot
+    always_online: true
+  slash_commands:
+    - command: /standup-setup
+      description: Configure the standup destination channel, defaults and schedule (admin only)
+      should_escape: false
+    - command: /standup-invite
+      description: Enroll every member of a channel into daily standups (admin only)
+      should_escape: false
+    - command: /standup-time
+      description: Set your own timezone, send time, reminder delay, or opt in/out
+      should_escape: false
+    - command: /standup-now
+      description: Fill out today's standup right now
+      should_escape: false
+oauth_config:
+  scopes:
+    bot:
+      - chat:write
+      - commands
+      - im:write
+      - im:history
+      - users:read
+      - channels:read
+      - groups:read
+      - conversations.connect:write
+settings:
+  event_subscriptions:
+    bot_events:
+      - message.im
+  interactivity:
+    is_enabled: true
+  org_deploy_enabled: false
+  socket_mode_enabled: true
+  token_rotation_enabled: false

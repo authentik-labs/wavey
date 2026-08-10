@@ -1,0 +1,117 @@
+import { IANAZone } from "luxon";
+import type { App, SlackCommandMiddlewareArgs, AllMiddlewareArgs } from "@slack/bolt";
+import type Database from "better-sqlite3";
+import { getConfigOrDefault, getEntry, getUser, createEntry } from "./db.js";
+import { localDate } from "./scheduling.js";
+import {
+  buildAlreadySubmittedMessage,
+  buildConfigModal,
+  buildFillOutModal,
+  buildInviteModal,
+  buildTimeModal,
+} from "./views.js";
+
+const HHMM_RE = /^([01]\d|2[0-3]):([0-5]\d)$/;
+
+async function isWorkspaceAdmin(app: App, userId: string): Promise<boolean> {
+  const info = await app.client.users.info({ user: userId });
+  return Boolean(info.user?.is_admin || info.user?.is_owner);
+}
+
+type CommandArgs = AllMiddlewareArgs & SlackCommandMiddlewareArgs;
+
+export function registerCommands(app: App, db: Database.Database): void {
+  app.command("/standup-setup", async ({ ack, command, client }: CommandArgs) => {
+    await ack();
+    if (!(await isWorkspaceAdmin(app, command.user_id))) {
+      await client.chat.postEphemeral({
+        channel: command.channel_id,
+        user: command.user_id,
+        text: "Only workspace admins can run /standup-setup.",
+      });
+      return;
+    }
+    await client.views.open({
+      trigger_id: command.trigger_id,
+      view: buildConfigModal(getConfigOrDefault(db)),
+    });
+  });
+
+  app.command("/standup-invite", async ({ ack, command, client }: CommandArgs) => {
+    await ack();
+    if (!(await isWorkspaceAdmin(app, command.user_id))) {
+      await client.chat.postEphemeral({
+        channel: command.channel_id,
+        user: command.user_id,
+        text: "Only workspace admins can run /standup-invite.",
+      });
+      return;
+    }
+    await client.views.open({ trigger_id: command.trigger_id, view: buildInviteModal() });
+  });
+
+  app.command("/standup-time", async ({ ack, command, client }: CommandArgs) => {
+    await ack();
+    const config = getConfigOrDefault(db);
+    const existing =
+      getUser(db, command.user_id) ??
+      ({
+        user_id: command.user_id,
+        timezone: config.default_timezone,
+        send_time: config.default_send_time,
+        reminder_minutes: config.default_reminder_minutes,
+        enabled: 1,
+        updated_at: "",
+      } as const);
+    await client.views.open({ trigger_id: command.trigger_id, view: buildTimeModal(existing) });
+  });
+
+  app.command("/standup-now", async ({ ack, command, client }: CommandArgs) => {
+    await ack();
+    const config = getConfigOrDefault(db);
+    const user = getUser(db, command.user_id);
+    const tz = user?.timezone ?? config.default_timezone;
+    const today = localDate(tz, new Date());
+
+    let entry = getEntry(db, command.user_id, today);
+    if (entry?.status === "submitted") {
+      await client.chat.postEphemeral({
+        channel: command.channel_id,
+        user: command.user_id,
+        ...buildAlreadySubmittedMessage(),
+      });
+      return;
+    }
+
+    if (!entry) {
+      const dm = await client.conversations.open({ users: command.user_id });
+      const dmChannelId = dm.channel?.id;
+      if (!dmChannelId) {
+        await client.chat.postEphemeral({
+          channel: command.channel_id,
+          user: command.user_id,
+          text: "Couldn't open a DM with you to track this - please try again.",
+        });
+        return;
+      }
+      entry = createEntry(db, command.user_id, today, dmChannelId, undefined);
+    }
+
+    await client.views.open({
+      trigger_id: command.trigger_id,
+      view: buildFillOutModal(entry.id, {
+        yesterday: entry.yesterday ?? undefined,
+        today: entry.today ?? undefined,
+        blockers: entry.blockers ?? undefined,
+      }),
+    });
+  });
+}
+
+export function validateTimezone(tz: string): boolean {
+  return IANAZone.isValidZone(tz);
+}
+
+export function validateHHmm(value: string): boolean {
+  return HHMM_RE.test(value);
+}
