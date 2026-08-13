@@ -3,11 +3,12 @@ import type Database from "better-sqlite3";
 import type { App } from "@slack/bolt";
 import type { Logger } from "../../core/logger.js";
 import {
-  createEntry,
+  claimEntry,
   getConfig,
   getEntry,
   listEnabledUsers,
   markReminded,
+  setPromptMessageTs,
 } from "./db.js";
 import type { StandupUserRow } from "./types.js";
 import { buildPromptMessage, buildReminderMessage } from "./views.js";
@@ -30,8 +31,12 @@ function localWeekday(tz: string, now: Date): number {
  * Runs once per scheduler tick. For every enabled user, sends today's prompt
  * DM if it's at/after their configured send time and one hasn't gone out
  * yet, and sends a single reminder DM if they haven't submitted within
- * their configured reminder window. Both checks are idempotent against
- * standup_entries, so ticking more often than once a minute is harmless.
+ * their configured reminder window.
+ *
+ * Every DM is gated on a claim against standup_entries - an insert that can
+ * only win once per user per day, and a status transition that can only win
+ * once per entry - so overlapping ticks, a second process, and /standup-now
+ * racing a tick all end up sending exactly one message rather than colliding.
  */
 export async function runStandupTick(app: App, db: Database.Database, logger: Logger, now: Date): Promise<void> {
   const config = getConfig(db);
@@ -71,14 +76,16 @@ async function handleUser(
       logger.warn({ userId: user.user_id }, "could not open DM channel");
       return;
     }
-    const entry = createEntry(db, user.user_id, today, dmChannelId, undefined);
+    // Claim before sending: if another tick or process got here first we skip
+    // silently rather than inserting a duplicate row or double-DMing.
+    const entry = claimEntry(db, user.user_id, today, dmChannelId);
+    if (!entry) return;
+
     const posted = await app.client.chat.postMessage({
       channel: dmChannelId,
       ...buildPromptMessage(entry.id),
     });
-    if (posted.ts) {
-      db.prepare("UPDATE standup_entries SET prompt_message_ts = ? WHERE id = ?").run(posted.ts, entry.id);
-    }
+    if (posted.ts) setPromptMessageTs(db, entry.id, posted.ts);
     logger.info({ userId: user.user_id, entryId: entry.id }, "sent standup prompt");
     return;
   }
@@ -89,10 +96,15 @@ async function handleUser(
   const dueForReminder = DateTime.fromJSDate(now, { zone: "utc" }) >= promptedAt.plus({ minutes: user.reminder_minutes });
   if (!dueForReminder) return;
 
+  // Claim the reminder *before* sending, not after. Marking first means a failed
+  // send costs this person their reminder for the day; marking after would let two
+  // concurrent ticks both pass the status check above and both nag them. At-most-once
+  // is what the module promises - don't flip this back around.
+  if (!markReminded(db, existing.id)) return;
+
   await app.client.chat.postMessage({
     channel: existing.dm_channel_id,
     ...buildReminderMessage(existing.id),
   });
-  markReminded(db, existing.id);
   logger.info({ userId: user.user_id, entryId: existing.id }, "sent standup reminder");
 }

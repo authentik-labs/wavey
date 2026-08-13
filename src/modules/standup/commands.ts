@@ -1,7 +1,7 @@
 import { IANAZone } from "luxon";
 import type { App, SlackCommandMiddlewareArgs, AllMiddlewareArgs } from "@slack/bolt";
 import type Database from "better-sqlite3";
-import { getConfigOrDefault, getEntry, getUser, createEntry } from "./db.js";
+import { getConfigOrDefault, getEntry, getUser, getOrCreateEntry } from "./db.js";
 import { localDate } from "./scheduling.js";
 import {
   buildAlreadySubmittedMessage,
@@ -94,7 +94,17 @@ export function registerCommands(app: App, db: Database.Database): void {
         });
         return;
       }
-      entry = createEntry(db, command.user_id, today, dmChannelId, undefined);
+      // getOrCreate, not create: a scheduled tick may have inserted the row while
+      // we were opening the DM.
+      entry = getOrCreateEntry(db, command.user_id, today, dmChannelId);
+      if (entry.status === "submitted") {
+        await client.chat.postEphemeral({
+          channel: command.channel_id,
+          user: command.user_id,
+          ...buildAlreadySubmittedMessage(),
+        });
+        return;
+      }
     }
 
     await client.views.open({

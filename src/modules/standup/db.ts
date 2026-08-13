@@ -129,28 +129,47 @@ export function getEntryById(db: Database.Database, id: number): StandupEntryRow
   return db.prepare("SELECT * FROM standup_entries WHERE id = ?").get(id) as StandupEntryRow | undefined;
 }
 
-export function createEntry(
+/**
+ * Claims today's entry for a user: inserts it, or returns undefined if one already
+ * existed. The insert is the arbiter, so a caller that only sends its prompt DM when
+ * it gets a row back can't double-send however many ticks or processes race it.
+ */
+export function claimEntry(
   db: Database.Database,
   userId: string,
   entryDate: string,
   dmChannelId: string,
-  promptMessageTs: string | undefined,
-): StandupEntryRow {
-  const promptedAt = new Date().toISOString();
+): StandupEntryRow | undefined {
   const result = db
     .prepare(
-      `INSERT INTO standup_entries (user_id, entry_date, status, prompted_at, dm_channel_id, prompt_message_ts)
-       VALUES (?, ?, 'prompted', ?, ?, ?)`,
+      `INSERT INTO standup_entries (user_id, entry_date, status, prompted_at, dm_channel_id)
+       VALUES (?, ?, 'prompted', ?, ?)
+       ON CONFLICT (user_id, entry_date) DO NOTHING`,
     )
-    .run(userId, entryDate, promptedAt, dmChannelId, promptMessageTs ?? null);
-  return getEntryById(db, Number(result.lastInsertRowid))!;
+    .run(userId, entryDate, new Date().toISOString(), dmChannelId);
+  return result.changes === 1 ? getEntryById(db, Number(result.lastInsertRowid)) : undefined;
 }
 
-export function markReminded(db: Database.Database, id: number): void {
-  db.prepare("UPDATE standup_entries SET status = 'reminded', reminded_at = ? WHERE id = ?").run(
-    new Date().toISOString(),
-    id,
-  );
+/** The entry for this user and day, creating it if absent. For flows that just want the row. */
+export function getOrCreateEntry(
+  db: Database.Database,
+  userId: string,
+  entryDate: string,
+  dmChannelId: string,
+): StandupEntryRow {
+  return claimEntry(db, userId, entryDate, dmChannelId) ?? getEntry(db, userId, entryDate)!;
+}
+
+/**
+ * Claims the reminder for an entry. Returns false if it wasn't in 'prompted' state -
+ * already reminded, already submitted, or claimed by a concurrent tick - in which case
+ * the caller must not send a reminder DM.
+ */
+export function markReminded(db: Database.Database, id: number): boolean {
+  const result = db
+    .prepare("UPDATE standup_entries SET status = 'reminded', reminded_at = ? WHERE id = ? AND status = 'prompted'")
+    .run(new Date().toISOString(), id);
+  return result.changes === 1;
 }
 
 export function submitEntry(

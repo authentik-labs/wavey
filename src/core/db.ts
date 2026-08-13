@@ -14,6 +14,9 @@ export function openDatabase(path: string): Database.Database {
   const db = new Database(path);
   db.pragma("journal_mode = WAL");
   db.pragma("foreign_keys = ON");
+  // Two processes on the same file - a watch-mode restart that overlaps, say - should
+  // wait for the writer rather than failing the write outright with SQLITE_BUSY.
+  db.pragma("busy_timeout = 5000");
   return db;
 }
 

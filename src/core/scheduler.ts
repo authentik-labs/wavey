@@ -10,6 +10,7 @@ export type TickHandler = (now: Date) => void | Promise<void>;
 export class Scheduler {
   private handlers: { name: string; handler: TickHandler }[] = [];
   private timer: NodeJS.Timeout | undefined;
+  private running = false;
 
   constructor(
     private readonly intervalMs: number,
@@ -33,13 +34,25 @@ export class Scheduler {
   }
 
   private async runOnce(): Promise<void> {
-    const now = new Date();
-    for (const { name, handler } of this.handlers) {
-      try {
-        await handler(now);
-      } catch (err) {
-        this.logger.error({ err, handler: name }, "scheduler handler failed");
+    // A tick that outlives intervalMs would otherwise be re-entered by the next one,
+    // and handlers would see the same due work twice. Skipping is safe: the next tick
+    // is one interval away and handlers are expected to be idempotent anyway.
+    if (this.running) {
+      this.logger.warn("previous tick is still running, skipping this one");
+      return;
+    }
+    this.running = true;
+    try {
+      const now = new Date();
+      for (const { name, handler } of this.handlers) {
+        try {
+          await handler(now);
+        } catch (err) {
+          this.logger.error({ err, handler: name }, "scheduler handler failed");
+        }
       }
+    } finally {
+      this.running = false;
     }
   }
 }
