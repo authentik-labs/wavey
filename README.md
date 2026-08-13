@@ -91,8 +91,10 @@ channels automatically; for a private one, `/invite @standup-bot` there and it'l
 
 Each participant gets DM'd at their configured local time with a "Fill out
 standup" button that opens a short form (yesterday / today / blockers, the
-last one optional). Submitting posts a formatted summary to the configured
-channel. If they haven't submitted after their configured reminder delay
+last one optional). The form shows your last standup — what you planned and any
+blockers, with the date it was from — above the fields for reference; it's read-only,
+so there's nothing to accidentally resubmit. Submitting posts a formatted summary to
+the configured channel. If they haven't submitted after their configured reminder delay
 (default 2 hours), they get one follow-up DM.
 
 ## Using the GitHub module

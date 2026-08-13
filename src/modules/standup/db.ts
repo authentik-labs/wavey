@@ -194,6 +194,29 @@ export function getEntryById(db: Database.Database, id: number): StandupEntryRow
 }
 
 /**
+ * The user's most recent submitted standup from before `beforeDate`, shown as
+ * reference when they fill out a new one.
+ *
+ * Filters on status rather than on the answer columns: an unsubmitted entry has all
+ * three NULL, but a submitted one can legitimately have NULL blockers. entry_date is
+ * YYYY-MM-DD, so sorting it lexically is sorting it chronologically.
+ */
+export function getPreviousSubmittedEntry(
+  db: Database.Database,
+  userId: string,
+  beforeDate: string,
+): StandupEntryRow | undefined {
+  return db
+    .prepare(
+      `SELECT * FROM standup_entries
+       WHERE user_id = ? AND entry_date < ? AND status = 'submitted'
+       ORDER BY entry_date DESC
+       LIMIT 1`,
+    )
+    .get(userId, beforeDate) as StandupEntryRow | undefined;
+}
+
+/**
  * Claims today's entry for a user: inserts it, or returns undefined if one already
  * existed. The insert is the arbiter, so a caller that only sends its prompt DM when
  * it gets a row back can't double-send however many ticks or processes race it.

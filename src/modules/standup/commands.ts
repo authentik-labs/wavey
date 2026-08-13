@@ -1,7 +1,7 @@
 import { IANAZone } from "luxon";
 import type { App, SlackCommandMiddlewareArgs, AllMiddlewareArgs } from "@slack/bolt";
 import type Database from "better-sqlite3";
-import { getConfigOrDefault, getEntry, getUser, getOrCreateEntry } from "./db.js";
+import { getConfigOrDefault, getEntry, getPreviousSubmittedEntry, getUser, getOrCreateEntry } from "./db.js";
 import { localDate } from "./scheduling.js";
 import {
   buildAlreadySubmittedMessage,
@@ -98,11 +98,15 @@ export function registerCommands(app: App, db: Database.Database): void {
 
     await client.views.open({
       trigger_id: command.trigger_id,
-      view: buildFillOutModal(entry.id, {
-        yesterday: entry.yesterday ?? undefined,
-        today: entry.today ?? undefined,
-        blockers: entry.blockers ?? undefined,
-      }),
+      view: buildFillOutModal(
+        entry.id,
+        {
+          yesterday: entry.yesterday ?? undefined,
+          today: entry.today ?? undefined,
+          blockers: entry.blockers ?? undefined,
+        },
+        getPreviousSubmittedEntry(db, command.user_id, today),
+      ),
     });
   });
 }

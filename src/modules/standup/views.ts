@@ -1,5 +1,6 @@
+import { DateTime } from "luxon";
 import type { KnownBlock, View } from "@slack/bolt";
-import type { StandupConfigRow, StandupUserRow } from "./types.js";
+import type { StandupConfigRow, StandupEntryRow, StandupUserRow } from "./types.js";
 
 export const ACTION_FILL_OUT = "standup_fill_out";
 export const VIEW_SUBMIT = "standup_submit_modal";
@@ -72,7 +73,72 @@ export function buildAlreadySubmittedMessage(): { text: string; blocks: KnownBlo
   };
 }
 
-export function buildFillOutModal(entryId: number, prefill?: { yesterday?: string; today?: string; blockers?: string }): View {
+/**
+ * Long answers get cut down: Slack rejects section text over 3000 characters, and a
+ * reference block only earns its place if it stays glanceable.
+ */
+const MAX_REFERENCE_CHARS = 600;
+
+function quoteAnswer(answer: string): string {
+  const trimmed = answer.trim();
+  const capped =
+    trimmed.length > MAX_REFERENCE_CHARS ? `${trimmed.slice(0, MAX_REFERENCE_CHARS - 1).trimEnd()}…` : trimmed;
+  // Blockquote every line so the reference reads as quoted past text rather than as
+  // more of the form.
+  return capped
+    .split("\n")
+    .map((line) => `> ${line}`)
+    .join("\n");
+}
+
+/** "2026-08-10" -> "Mon 10 Aug". The date is what makes an old reference self-explanatory. */
+function formatEntryDate(entryDate: string): string {
+  const parsed = DateTime.fromISO(entryDate);
+  return parsed.isValid ? parsed.toFormat("ccc d LLL") : entryDate;
+}
+
+/**
+ * The user's last standup, shown above the inputs for reference. Read-only on purpose -
+ * prefilling the fields instead would make it far too easy to resubmit last week's
+ * answers unchanged.
+ *
+ * These blocks deliberately carry no block_id: the submit handler looks values up by
+ * block_id and its validation errors key off "yesterday"/"today"/"blockers", so nothing
+ * here may shadow those.
+ */
+function referenceBlocks(previous: StandupEntryRow | undefined): KnownBlock[] {
+  const planned = previous?.today?.trim();
+  if (!previous || !planned) return [];
+
+  const blocks: KnownBlock[] = [
+    {
+      type: "context",
+      elements: [{ type: "mrkdwn", text: `*Your last standup* · ${formatEntryDate(previous.entry_date)}` }],
+    },
+    {
+      type: "section",
+      text: { type: "mrkdwn", text: `*Planned:*\n${quoteAnswer(planned)}` },
+    },
+  ];
+
+  const blockers = previous.blockers?.trim();
+  if (blockers) {
+    blocks.push({ type: "section", text: { type: "mrkdwn", text: `*Blockers:*\n${quoteAnswer(blockers)}` } });
+  }
+
+  blocks.push({ type: "divider" });
+  return blocks;
+}
+
+/**
+ * `prefill` restores today's own half-finished draft; `previous` is the last standup
+ * they submitted, shown as read-only reference. The two are unrelated.
+ */
+export function buildFillOutModal(
+  entryId: number,
+  prefill?: { yesterday?: string; today?: string; blockers?: string },
+  previous?: StandupEntryRow,
+): View {
   return {
     type: "modal",
     callback_id: VIEW_SUBMIT,
@@ -81,6 +147,7 @@ export function buildFillOutModal(entryId: number, prefill?: { yesterday?: strin
     submit: { type: "plain_text", text: "Submit" },
     close: { type: "plain_text", text: "Cancel" },
     blocks: [
+      ...referenceBlocks(previous),
       {
         type: "input",
         block_id: "yesterday",

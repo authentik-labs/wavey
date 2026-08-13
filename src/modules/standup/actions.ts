@@ -1,7 +1,14 @@
 import type { App } from "@slack/bolt";
 import type Database from "better-sqlite3";
 import type { Logger } from "../../core/logger.js";
-import { getConfigOrDefault, getEntryById, submitEntry, upsertConfig, upsertUser } from "./db.js";
+import {
+  getConfigOrDefault,
+  getEntryById,
+  getPreviousSubmittedEntry,
+  submitEntry,
+  upsertConfig,
+  upsertUser,
+} from "./db.js";
 import { syncMembership } from "./membership.js";
 import {
   ACTION_FILL_OUT,
@@ -72,11 +79,15 @@ export function registerActions(app: App, db: Database.Database, logger: Logger)
 
     await client.views.open({
       trigger_id: body.trigger_id,
-      view: buildFillOutModal(entry.id, {
-        yesterday: entry.yesterday ?? undefined,
-        today: entry.today ?? undefined,
-        blockers: entry.blockers ?? undefined,
-      }),
+      view: buildFillOutModal(
+        entry.id,
+        {
+          yesterday: entry.yesterday ?? undefined,
+          today: entry.today ?? undefined,
+          blockers: entry.blockers ?? undefined,
+        },
+        getPreviousSubmittedEntry(db, entry.user_id, entry.entry_date),
+      ),
     });
   });
 
