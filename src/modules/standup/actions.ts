@@ -1,18 +1,11 @@
 import type { App } from "@slack/bolt";
 import type Database from "better-sqlite3";
 import type { Logger } from "../../core/logger.js";
-import {
-  getConfigOrDefault,
-  getEntryById,
-  getUser,
-  submitEntry,
-  upsertConfig,
-  upsertUser,
-} from "./db.js";
+import { getConfigOrDefault, getEntryById, submitEntry, upsertConfig, upsertUser } from "./db.js";
+import { syncMembership } from "./membership.js";
 import {
   ACTION_FILL_OUT,
   VIEW_CONFIG,
-  VIEW_INVITE,
   VIEW_SUBMIT,
   VIEW_TIME,
   buildAlreadySubmittedMessage,
@@ -20,6 +13,33 @@ import {
   buildPostedMessage,
 } from "./views.js";
 import { validateHHmm, validateTimezone } from "./commands.js";
+
+type SlackClient = App["client"];
+
+/**
+ * We can only read a channel's members from inside it. Public channels we can join
+ * ourselves; private ones have to invite us. Returns whether we're in.
+ */
+async function ensureInChannel(client: SlackClient, logger: Logger, channel: string): Promise<boolean> {
+  try {
+    await client.conversations.join({ channel });
+    return true;
+  } catch (err) {
+    const code = (err as { data?: { error?: string } }).data?.error;
+    if (code === "already_in_channel") return true;
+    if (code === "method_not_supported_for_channel_type") {
+      // Private channel - conversations.join doesn't apply, so probe membership.
+      try {
+        await client.conversations.members({ channel, limit: 1 });
+        return true;
+      } catch {
+        return false;
+      }
+    }
+    logger.warn({ err, channel }, "could not join standup channel");
+    return false;
+  }
+}
 
 type StateValues = Record<string, Record<string, { value?: string | null; selected_option?: { value: string } }>>;
 
@@ -125,17 +145,33 @@ export function registerActions(app: App, db: Database.Database, logger: Logger)
     }
     await ack();
 
+    const channelId = rawChannel!;
+    const previousChannel = getConfigOrDefault(db).channel_id;
+
     upsertConfig(db, {
-      channel_id: rawChannel!,
+      channel_id: channelId,
       default_timezone: timezone,
       default_send_time: sendTime,
       default_reminder_minutes: reminderMinutes,
       skip_weekends: skipWeekends ? 1 : 0,
     });
 
+    let note = "";
+    if (channelId !== previousChannel) {
+      // We can only read the member list from inside the channel. Public channels we
+      // can join ourselves; private ones need an invite.
+      const joined = await ensureInChannel(client, logger, channelId);
+      if (joined) {
+        const { enrolled, removed } = await syncMembership(app, db, logger);
+        note = ` Enrolled ${enrolled} participant(s)${removed ? `, removed ${removed}` : ""}.`;
+      } else {
+        note = ` I'm not in <#${channelId}> yet - run \`/invite @standup-bot\` there so I can see who to enroll.`;
+      }
+    }
+
     await client.chat.postMessage({
       channel: body.user.id,
-      text: `Standup settings saved. Posting to <#${rawChannel}> at ${sendTime} (${timezone}) on weekdays${skipWeekends ? "" : " and weekends"}.`,
+      text: `Standup settings saved. Posting to <#${channelId}> at ${sendTime} (${timezone}) on weekdays${skipWeekends ? "" : " and weekends"}.${note}`,
     });
   });
 
@@ -144,7 +180,6 @@ export function registerActions(app: App, db: Database.Database, logger: Logger)
     const timezone = textValue(values, "timezone");
     const sendTime = textValue(values, "send_time");
     const reminderMinutes = Number(textValue(values, "reminder_minutes"));
-    const enabled = selectValue(values, "enabled") === "yes";
 
     const errors: Record<string, string> = {};
     if (!validateTimezone(timezone)) errors.timezone = "Not a valid IANA timezone (e.g. America/New_York).";
@@ -158,60 +193,11 @@ export function registerActions(app: App, db: Database.Database, logger: Logger)
     await ack();
 
     const config = getConfigOrDefault(db);
-    upsertUser(
-      db,
-      body.user.id,
-      { timezone, send_time: sendTime, reminder_minutes: reminderMinutes, enabled: enabled ? 1 : 0 },
-      config,
-    );
+    upsertUser(db, body.user.id, { timezone, send_time: sendTime, reminder_minutes: reminderMinutes }, config);
 
     await client.chat.postMessage({
       channel: body.user.id,
-      text: enabled
-        ? `Got it - I'll prompt you at ${sendTime} (${timezone}), with a reminder after ${reminderMinutes}m if needed.`
-        : "Got it - you're opted out of daily standups. Run /standup-time again anytime to opt back in.",
-    });
-  });
-
-  app.view(VIEW_INVITE, async ({ ack, view, body, client }) => {
-    await ack();
-    const channelId = (view.state.values as any).channel?.value?.selected_conversation as string | undefined;
-    if (!channelId) return;
-
-    const config = getConfigOrDefault(db);
-    const botUserId = (await client.auth.test()).user_id;
-
-    const memberIds: string[] = [];
-    let cursor: string | undefined;
-    do {
-      const page = await client.conversations.members({ channel: channelId, cursor, limit: 200 });
-      memberIds.push(...(page.members ?? []));
-      cursor = page.response_metadata?.next_cursor || undefined;
-    } while (cursor);
-
-    let enrolled = 0;
-    for (const userId of memberIds) {
-      if (userId === botUserId || getUser(db, userId)) continue; // skip the bot itself and anyone already configured
-      const info = await client.users.info({ user: userId });
-      const u = info.user;
-      if (!u || u.is_bot || u.deleted) continue;
-
-      upsertUser(db, userId, {}, config);
-      enrolled++;
-      try {
-        const dm = await client.conversations.open({ users: userId });
-        await client.chat.postMessage({
-          channel: dm.channel!.id!,
-          text: `You've been enrolled in daily standups :wave: I'll DM you at ${config.default_send_time} (${config.default_timezone}) each weekday. Run /standup-time anytime to change your schedule or opt out.`,
-        });
-      } catch (err) {
-        logger.warn({ err, userId }, "failed to send standup welcome DM");
-      }
-    }
-
-    await client.chat.postMessage({
-      channel: body.user.id,
-      text: `Enrolled ${enrolled} new participant(s) from <#${channelId}>.`,
+      text: `Got it - I'll prompt you at ${sendTime} (${timezone}), with a reminder after ${reminderMinutes}m if needed.`,
     });
   });
 }

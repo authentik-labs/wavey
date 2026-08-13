@@ -15,7 +15,8 @@ export interface StandupUserRow {
   timezone: string;
   send_time: string; // HH:mm, 24h
   reminder_minutes: number;
-  enabled: number; // sqlite boolean (0/1)
+  /** sqlite boolean (0/1) - a member of the destination channel. Owned by the membership sync. */
+  in_channel: number;
   updated_at: string;
 }
 

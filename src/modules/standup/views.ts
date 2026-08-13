@@ -5,7 +5,6 @@ export const ACTION_FILL_OUT = "standup_fill_out";
 export const VIEW_SUBMIT = "standup_submit_modal";
 export const VIEW_CONFIG = "standup_config_modal";
 export const VIEW_TIME = "standup_time_modal";
-export const VIEW_INVITE = "standup_invite_modal";
 
 export function buildPromptMessage(entryId: number): { text: string; blocks: KnownBlock[] } {
   return {
@@ -254,45 +253,6 @@ export function buildTimeModal(current: StandupUserRow): View {
           type: "plain_text_input",
           action_id: "value",
           initial_value: String(current.reminder_minutes),
-        },
-      },
-      {
-        type: "input",
-        block_id: "enabled",
-        label: { type: "plain_text", text: "Participate in daily standups" },
-        element: {
-          type: "static_select",
-          action_id: "value",
-          initial_option:
-            current.enabled === 1
-              ? { text: { type: "plain_text", text: "Yes" }, value: "yes" }
-              : { text: { type: "plain_text", text: "No" }, value: "no" },
-          options: [
-            { text: { type: "plain_text", text: "Yes" }, value: "yes" },
-            { text: { type: "plain_text", text: "No" }, value: "no" },
-          ],
-        },
-      },
-    ],
-  };
-}
-
-export function buildInviteModal(): View {
-  return {
-    type: "modal",
-    callback_id: VIEW_INVITE,
-    title: { type: "plain_text", text: "Invite a channel" },
-    submit: { type: "plain_text", text: "Invite" },
-    close: { type: "plain_text", text: "Cancel" },
-    blocks: [
-      {
-        type: "input",
-        block_id: "channel",
-        label: { type: "plain_text", text: "Enroll every member of" },
-        element: {
-          type: "conversations_select",
-          action_id: "value",
-          filter: { include: ["public", "private"] },
         },
       },
     ],

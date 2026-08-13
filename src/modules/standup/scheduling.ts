@@ -6,7 +6,7 @@ import {
   claimEntry,
   getConfig,
   getEntry,
-  listEnabledUsers,
+  listActiveUsers,
   markReminded,
   setPromptMessageTs,
 } from "./db.js";
@@ -28,7 +28,7 @@ function localWeekday(tz: string, now: Date): number {
 }
 
 /**
- * Runs once per scheduler tick. For every enabled user, sends today's prompt
+ * Runs once per scheduler tick. For every participant, sends today's prompt
  * DM if it's at/after their configured send time and one hasn't gone out
  * yet, and sends a single reminder DM if they haven't submitted within
  * their configured reminder window.
@@ -42,7 +42,7 @@ export async function runStandupTick(app: App, db: Database.Database, logger: Lo
   const config = getConfig(db);
   if (!config?.channel_id) return; // not configured yet, nothing to do
 
-  const users = listEnabledUsers(db);
+  const users = listActiveUsers(db);
   for (const user of users) {
     try {
       await handleUser(app, db, logger, user, config.skip_weekends === 1, now);

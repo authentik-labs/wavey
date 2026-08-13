@@ -43,6 +43,13 @@ export const migrations: Migration[] = [
       );
     `,
   },
+  {
+    // Membership of the destination channel now decides who participates, so this
+    // column stopped meaning "the user wants standups" and started meaning "the
+    // user is in the channel". Only the membership sync writes it.
+    name: "standup.002_membership",
+    sql: `ALTER TABLE standup_users RENAME COLUMN enabled TO in_channel;`,
+  },
 ];
 
 export function getConfig(db: Database.Database): StandupConfigRow | undefined {
@@ -85,8 +92,61 @@ export function getUser(db: Database.Database, userId: string): StandupUserRow |
   return db.prepare("SELECT * FROM standup_users WHERE user_id = ?").get(userId) as StandupUserRow | undefined;
 }
 
-export function listEnabledUsers(db: Database.Database): StandupUserRow[] {
-  return db.prepare("SELECT * FROM standup_users WHERE enabled = 1").all() as StandupUserRow[];
+/** Everyone currently in the destination channel - the people the tick prompts. */
+export function listActiveUsers(db: Database.Database): StandupUserRow[] {
+  return db.prepare("SELECT * FROM standup_users WHERE in_channel = 1").all() as StandupUserRow[];
+}
+
+/** The user_ids the DB believes are in the channel - the left side of the sync's diff. */
+export function listInChannelUserIds(db: Database.Database): string[] {
+  const rows = db.prepare("SELECT user_id FROM standup_users WHERE in_channel = 1").all() as {
+    user_id: string;
+  }[];
+  return rows.map((row) => row.user_id);
+}
+
+/**
+ * Marks a user as in the destination channel, creating their row from the config
+ * defaults the first time. Returns true only for the 0 -> 1 transition, so however
+ * many join events and reconciles race each other, exactly one of them sends the
+ * welcome DM. Same claim shape as claimEntry below.
+ *
+ * The DO UPDATE deliberately touches only in_channel: a rejoin must not reset the
+ * timezone and send time the person picked last time round.
+ */
+export function claimJoin(
+  db: Database.Database,
+  userId: string,
+  defaults: Omit<StandupConfigRow, "id" | "channel_id" | "updated_at">,
+): boolean {
+  const result = db
+    .prepare(
+      `INSERT INTO standup_users (user_id, timezone, send_time, reminder_minutes, in_channel, updated_at)
+       VALUES (@user_id, @timezone, @send_time, @reminder_minutes, 1, @updated_at)
+       ON CONFLICT (user_id) DO UPDATE SET
+         in_channel = 1,
+         updated_at = excluded.updated_at
+       WHERE standup_users.in_channel = 0`,
+    )
+    .run({
+      user_id: userId,
+      timezone: defaults.default_timezone,
+      send_time: defaults.default_send_time,
+      reminder_minutes: defaults.default_reminder_minutes,
+      updated_at: new Date().toISOString(),
+    });
+  return result.changes === 1;
+}
+
+/**
+ * Soft removal - keeps their timezone and send time for when they rejoin. Returns
+ * true only for the 1 -> 0 transition, so the log records real departures.
+ */
+export function markLeft(db: Database.Database, userId: string): boolean {
+  const result = db
+    .prepare("UPDATE standup_users SET in_channel = 0, updated_at = ? WHERE user_id = ? AND in_channel = 1")
+    .run(new Date().toISOString(), userId);
+  return result.changes === 1;
 }
 
 export function upsertUser(
@@ -102,18 +162,22 @@ export function upsertUser(
       timezone: defaults.default_timezone,
       send_time: defaults.default_send_time,
       reminder_minutes: defaults.default_reminder_minutes,
-      enabled: 1,
+      // Only claimJoin grants membership. A row born here - someone saving their
+      // settings - must not enrol them, or /standup-time becomes a way to opt in
+      // without being in the channel. (The renamed column still carries DEFAULT 1,
+      // so this has to be explicit.)
+      in_channel: 0,
       updated_at: new Date().toISOString(),
     } as StandupUserRow);
   const next: StandupUserRow = { ...current, ...patch, user_id: userId, updated_at: new Date().toISOString() };
   db.prepare(
-    `INSERT INTO standup_users (user_id, timezone, send_time, reminder_minutes, enabled, updated_at)
-     VALUES (@user_id, @timezone, @send_time, @reminder_minutes, @enabled, @updated_at)
+    `INSERT INTO standup_users (user_id, timezone, send_time, reminder_minutes, in_channel, updated_at)
+     VALUES (@user_id, @timezone, @send_time, @reminder_minutes, @in_channel, @updated_at)
      ON CONFLICT (user_id) DO UPDATE SET
        timezone = excluded.timezone,
        send_time = excluded.send_time,
        reminder_minutes = excluded.reminder_minutes,
-       enabled = excluded.enabled,
+       in_channel = excluded.in_channel,
        updated_at = excluded.updated_at`,
   ).run(next);
   return next;

@@ -7,7 +7,6 @@ import {
   buildAlreadySubmittedMessage,
   buildConfigModal,
   buildFillOutModal,
-  buildInviteModal,
   buildTimeModal,
 } from "./views.js";
 
@@ -37,32 +36,22 @@ export function registerCommands(app: App, db: Database.Database): void {
     });
   });
 
-  app.command("/standup-invite", async ({ ack, command, client }: CommandArgs) => {
+  app.command("/standup-time", async ({ ack, command, client }: CommandArgs) => {
     await ack();
-    if (!(await isWorkspaceAdmin(app, command.user_id))) {
+    const existing = getUser(db, command.user_id);
+    if (!existing || existing.in_channel !== 1) {
+      // Opening the modal would create a row on submit, self-enrolling someone the
+      // next membership sweep would just remove again.
+      const channelId = getConfigOrDefault(db).channel_id;
       await client.chat.postEphemeral({
         channel: command.channel_id,
         user: command.user_id,
-        text: "Only workspace admins can run /standup-invite.",
+        text: channelId
+          ? `You're not in <#${channelId}> yet - join it and I'll start including you in daily standups.`
+          : "Daily standups aren't set up yet - an admin needs to run /standup-setup first.",
       });
       return;
     }
-    await client.views.open({ trigger_id: command.trigger_id, view: buildInviteModal() });
-  });
-
-  app.command("/standup-time", async ({ ack, command, client }: CommandArgs) => {
-    await ack();
-    const config = getConfigOrDefault(db);
-    const existing =
-      getUser(db, command.user_id) ??
-      ({
-        user_id: command.user_id,
-        timezone: config.default_timezone,
-        send_time: config.default_send_time,
-        reminder_minutes: config.default_reminder_minutes,
-        enabled: 1,
-        updated_at: "",
-      } as const);
     await client.views.open({ trigger_id: command.trigger_id, view: buildTimeModal(existing) });
   });
 

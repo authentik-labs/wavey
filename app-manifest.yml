@@ -10,11 +10,8 @@ features:
     - command: /standup-setup
       description: Configure the standup destination channel, defaults and schedule (admin only)
       should_escape: false
-    - command: /standup-invite
-      description: Enroll every member of a channel into daily standups (admin only)
-      should_escape: false
     - command: /standup-time
-      description: Set your own timezone, send time, reminder delay, or opt in/out
+      description: Set your own timezone, send time or reminder delay
       should_escape: false
     - command: /standup-now
       description: Fill out today's standup right now
@@ -30,6 +27,8 @@ oauth_config:
       - channels:read
       - groups:read
       - conversations.connect:write
+      # standup module: join a public destination channel to read its membership
+      - channels:join
       # github module: read @-mentions and the thread they happen in
       - app_mentions:read
       - channels:history
@@ -40,6 +39,9 @@ settings:
     bot_events:
       - message.im
       - app_mention
+      # standup module: keep participants in step with the destination channel
+      - member_joined_channel
+      - member_left_channel
   interactivity:
     is_enabled: true
   org_deploy_enabled: false

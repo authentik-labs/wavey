@@ -75,11 +75,21 @@ The SQLite database is created at `DB_PATH` (default `./data/bot.sqlite3`) on fi
 ## Using the standup module
 
 - `/standup-setup` (workspace admins) - pick the destination channel, default timezone, default send time, default reminder delay, and whether to skip weekends.
-- `/standup-invite` (workspace admins) - enroll everyone in a given channel using the defaults from `/standup-setup`; existing participants' settings are left untouched.
-- `/standup-time` (anyone) - set your own timezone / send time / reminder delay, or opt in/out entirely.
+- `/standup-time` (participants) - set your own timezone / send time / reminder delay.
 - `/standup-now` (anyone) - fill out today's standup immediately, without waiting for your scheduled prompt.
 
-Each enabled user gets DM'd at their configured local time with a "Fill out
+**Membership of the destination channel is the participant list.** Joining it enrols you (with a
+welcome DM); leaving removes you. There's no invite command and no admin step — the bot reacts to
+join/leave events and re-checks the full member list every 15 minutes, so it self-heals after
+downtime. Leaving the channel is also how you opt out.
+
+Removal is soft: your timezone and send time are kept, so rejoining restores your settings rather
+than resetting them to the defaults.
+
+The bot has to be in the destination channel to read its members. `/standup-setup` joins public
+channels automatically; for a private one, `/invite @standup-bot` there and it'll pick everyone up.
+
+Each participant gets DM'd at their configured local time with a "Fill out
 standup" button that opens a short form (yesterday / today / blockers, the
 last one optional). Submitting posts a formatted summary to the configured
 channel. If they haven't submitted after their configured reminder delay
@@ -139,6 +149,9 @@ Issues are opened by the GitHub App itself, so they show up as authored by
 - Single-workspace deployment (one bot token, one Socket Mode connection). Multi-workspace/OAuth installs aren't implemented.
 - Standup: reminders are sent at most once per day per person - no repeated nagging.
 - Standup: weekday/weekend skipping is global (`skip_weekends` in `/standup-setup`), not per-user.
+- Standup: participation follows the destination channel, so there's no way to be in the channel
+  without getting standups. Upgrading from a version with the opt-in/out toggle will re-enrol
+  anyone who had opted out but is still in the channel.
 - GitHub: one app identity for the whole workspace - no per-user GitHub auth, and no way to
   restrict which repos people can file into beyond the app's installations.
 - GitHub: `app_mention` only fires in conversations the bot has been invited to, so mentions
