@@ -1,4 +1,5 @@
 import type { BotModule } from "../core/module.js";
+import { githubModule } from "./github/index.js";
 import { standupModule } from "./standup/index.js";
 
 /**
@@ -6,4 +7,4 @@ import { standupModule } from "./standup/index.js";
  * src/modules/<name>/ that satisfies BotModule and list it here - core
  * (src/index.ts, src/core/*) never needs to change.
  */
-export const modules: BotModule[] = [standupModule];
+export const modules: BotModule[] = [standupModule, githubModule];

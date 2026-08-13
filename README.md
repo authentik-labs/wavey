@@ -1,10 +1,13 @@
 # slackbot
 
 A modular Slack bot built on [Bolt for JS](https://slack.dev/bolt-js/) + Socket Mode. Ships
-with a **standup** module - a dailybot replacement that DMs each person at a
-configurable time in their own timezone, collects "yesterday / today /
-blockers", posts the answers to a shared channel, and sends a follow-up
-reminder if they haven't responded.
+with two modules:
+
+- **standup** - a dailybot replacement that DMs each person at a configurable time in their
+  own timezone, collects "yesterday / today / blockers", posts the answers to a shared
+  channel, and sends a follow-up reminder if they haven't responded.
+- **github** - @-mention the bot in any channel or thread to turn the conversation into a
+  GitHub issue.
 
 ## How it's organized
 
@@ -19,6 +22,7 @@ src/
   modules/
     index.ts        # the list of installed modules - add new features here
     standup/         # the standup/check-in feature, self-contained
+    github/          # @-mention -> GitHub issue, self-contained
   index.ts           # wires config + db + scheduler + modules together, starts the app
 ```
 
@@ -50,7 +54,11 @@ shared infrastructure.
 3. Under **Basic Information**, copy the **Signing Secret** -> `SLACK_SIGNING_SECRET`.
 4. Under **Basic Information -> App-Level Tokens**, create a token with the `connections:write` scope -> `SLACK_APP_TOKEN` (starts with `xapp-`).
 5. Under **OAuth & Permissions**, install the app to your workspace and copy the **Bot User OAuth Token** -> `SLACK_BOT_TOKEN` (starts with `xoxb-`).
-6. Invite the bot to whichever channel you want standups posted to (e.g. `/invite @standup-bot` in `#standup`).
+6. Invite the bot to whichever channel you want standups posted to (e.g. `/invite @standup-bot` in `#standup`), and to any channel where people should be able to @-mention it for GitHub issues.
+
+If you're upgrading an existing install, re-import `app-manifest.yml` and reinstall the app -
+the github module needs the `app_mentions:read`, `channels:history`, `groups:history` and
+`mpim:history` scopes plus the `app_mention` event, which older installs don't have.
 
 ## Running it
 
@@ -77,8 +85,61 @@ last one optional). Submitting posts a formatted summary to the configured
 channel. If they haven't submitted after their configured reminder delay
 (default 2 hours), they get one follow-up DM.
 
-### Notes / current limitations
+## Using the GitHub module
+
+### Setting up the GitHub App
+
+The module authenticates as a GitHub App, so issues are attributed to the app rather than to
+someone's personal account, and access is scoped to the repos the app is installed on.
+
+1. Create the app: **Settings → Developer settings → GitHub Apps → New GitHub App** (under your
+   org for an org-wide app). Homepage URL can be anything; uncheck **Active** under Webhook -
+   the bot polls nothing and receives nothing from GitHub.
+2. Under **Permissions → Repository permissions**, set **Issues** to **Read and write**. Nothing
+   else is needed. (Metadata: Read-only is added automatically.)
+3. Create the app, note the **App ID** → `GITHUB_APP_ID`, then **Generate a private key** and save
+   the downloaded `.pem` → `GITHUB_APP_PRIVATE_KEY_PATH` (or inline it as
+   `GITHUB_APP_PRIVATE_KEY`, with `\n` escapes or base64-encoded).
+4. **Install App** → pick the org/account and the repositories it may file issues into.
+
+The installation covering each repo is looked up automatically and cached, so one app can serve
+several orgs; set `GITHUB_APP_INSTALLATION_ID` to pin it to one and skip the lookup. Installation
+tokens are short-lived and refreshed automatically. Without an app id and private key the module
+logs a warning at startup and stays completely out of the way.
+
+### Filing issues
+
+Set `GITHUB_DEFAULT_REPO` and @-mention the bot anywhere it's a member:
+
+```
+@bot Login redirect drops the next param      # issue in GITHUB_DEFAULT_REPO, created immediately
+@bot owner/repo Login redirect is broken      # repo as the first positional argument
+@bot                                          # button -> a prefilled modal you can edit first
+@bot --label bug,ui --assignee octocat Broken # labels and assignees
+@bot --force Another angle on this            # second issue for a thread that already has one
+```
+
+Anything that isn't a flag or the leading `owner/repo` becomes the title; quote it if it
+contains something that looks like a flag. Arguments are parsed with
+[`yargs-parser`](https://github.com/yargs/yargs-parser), so `--label=bug`, `-l bug`, and
+repeated flags all work. Mentioning the bot with no title opens a modal instead, where you can
+edit the repo, title, labels and assignees, add extra context, and choose whether to attach the
+transcript.
+
+The issue body is the whole Slack thread rendered as markdown - user mentions, channel
+references and links resolved - with a permalink back to Slack, and it's truncated if the thread
+is enormous. Created issues are recorded in the `github_issues` table, which is what powers the
+"this thread already has an issue" warning.
+
+Issues are opened by the GitHub App itself, so they show up as authored by
+*your-app-name[bot]*; the body names the actual Slack reporter.
+
+## Notes / current limitations
 
 - Single-workspace deployment (one bot token, one Socket Mode connection). Multi-workspace/OAuth installs aren't implemented.
-- Reminders are sent at most once per day per person - no repeated nagging.
-- Weekday/weekend skipping is global (`skip_weekends` in `/standup-setup`), not per-user.
+- Standup: reminders are sent at most once per day per person - no repeated nagging.
+- Standup: weekday/weekend skipping is global (`skip_weekends` in `/standup-setup`), not per-user.
+- GitHub: one app identity for the whole workspace - no per-user GitHub auth, and no way to
+  restrict which repos people can file into beyond the app's installations.
+- GitHub: `app_mention` only fires in conversations the bot has been invited to, so mentions
+  elsewhere silently do nothing.
