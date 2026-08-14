@@ -26,6 +26,7 @@
     "yargs-parser": "^22.0.0"
   },
   "devDependencies": {
+    "@slack/types": "^3.0.0",
     "@types/better-sqlite3": "^9.6.0",
     "@types/luxon": "^3.4.2",
     "@types/node": "^26.2.0",
