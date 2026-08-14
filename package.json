@@ -17,7 +17,7 @@
     "@octokit/auth-app": "^8.3.0",
     "@octokit/request-error": "^7.1.1",
     "@octokit/rest": "^22.0.1",
-    "@slack/bolt": "^3.22.0",
+    "@slack/bolt": "^5.0.0",
     "better-sqlite3": "^13.0.3",
     "dotenv": "^17.4.2",
     "luxon": "^3.5.0",
@@ -26,6 +26,7 @@
     "yargs-parser": "^22.0.0"
   },
   "devDependencies": {
+    "@slack/types": "^3.0.0",
     "@types/better-sqlite3": "^9.6.0",
     "@types/luxon": "^3.4.2",
     "@types/node": "^26.2.0",

@@ -1,4 +1,4 @@
-import type { KnownBlock, View } from "@slack/bolt";
+import type { KnownBlock, View } from "@slack/types";
 import type { GithubIssueRow, PromptState } from "./types.js";
 
 export const ACTION_OPEN_MODAL = "github_open_modal";

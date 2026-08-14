@@ -1,5 +1,5 @@
 import { DateTime } from "luxon";
-import type { KnownBlock, View } from "@slack/bolt";
+import type { KnownBlock, View } from "@slack/types";
 import type { StandupConfigRow, StandupEntryRow, StandupUserRow } from "./types.js";
 
 export const ACTION_FILL_OUT = "standup_fill_out";
