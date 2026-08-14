@@ -1,0 +1,13 @@
+.git
+.gitignore
+node_modules
+dist
+data
+k8s
+*.md
+.env
+.env.*
+*.pem
+*.sqlite3
+*.sqlite3-*
+.DS_Store

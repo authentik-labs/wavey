@@ -176,7 +176,8 @@ export function registerActions(app: App, db: Database.Database, logger: Logger)
         const { enrolled, removed } = await syncMembership(app, db, logger);
         note = ` Enrolled ${enrolled} participant(s)${removed ? `, removed ${removed}` : ""}.`;
       } else {
-        note = ` I'm not in <#${channelId}> yet - run \`/invite @standup-bot\` there so I can see who to enroll.`;
+        // Handle must match features.bot_user.display_name in app-manifest.yml.
+        note = ` I'm not in <#${channelId}> yet - run \`/invite @wavey\` there so I can see who to enroll.`;
       }
     }
 

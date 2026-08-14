@@ -1,0 +1,94 @@
+# Minimal deployment for the bot. Socket Mode means it dials out to Slack and serves
+# nothing, so there is no Service, no Ingress and no port.
+#
+# Create the secrets first (see README):
+#   kubectl create secret generic wavey --from-literal=SLACK_BOT_TOKEN=... ...
+#   kubectl create secret generic wavey-github-key --from-file=github-app.pem=...
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: wavey-data
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+  # storageClassName: standard   # set if your cluster has no default StorageClass
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wavey
+  labels:
+    app: wavey
+spec:
+  # Both of these are load-bearing, not defaults worth tuning:
+  #
+  # replicas: 1  - the state is a SQLite file on a ReadWriteOnce volume, and every
+  #   replica runs its own scheduler. A second replica means two tick loops racing over
+  #   the same database.
+  # strategy: Recreate - the default RollingUpdate briefly runs the new pod alongside
+  #   the old one, which is that same race plus a volume that can't be mounted twice.
+  #   Recreate accepts a few seconds of downtime instead; the bot has no inbound traffic
+  #   to drop, and a missed tick is picked up by the next one.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: wavey
+  template:
+    metadata:
+      labels:
+        app: wavey
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000 # the `node` user in the official image
+        runAsGroup: 1000
+        fsGroup: 1000 # without this the mounted volume is root-owned and unwritable
+      containers:
+        - name: wavey
+          image: ghcr.io/OWNER/wavey:latest # replace with your image
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - secretRef:
+                name: wavey
+          env:
+            - name: DB_PATH
+              value: /data/bot.sqlite3
+            # github module only - drop this, the volumeMount and the volume below if
+            # you're just running standup.
+            - name: GITHUB_APP_PRIVATE_KEY_PATH
+              value: /etc/wavey/github-app.pem
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: github-key
+              mountPath: /etc/wavey
+              readOnly: true
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          # No HTTP server to probe. The process exits non-zero on a fatal startup error
+          # and on an unrecoverable socket failure, so restartPolicy does the work.
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: wavey-data
+        - name: github-key
+          secret:
+            secretName: wavey-github-key
+            # 0440, not 0400: a secret volume is owned by root with the group set to
+            # fsGroup, so the container's uid 1000 reads the key through the group bit.
+            defaultMode: 0440

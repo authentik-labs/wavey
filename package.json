@@ -1,7 +1,7 @@
 {
-  "name": "slackbot",
+  "name": "wavey",
   "version": "0.1.0",
-  "description": "Modular Slack bot. Ships with a standup/daily-check-in module (dailybot replacement).",
+  "description": "Modular Slack bot. Runs daily standups and files GitHub issues from threads.",
   "type": "module",
   "private": true,
   "engines": {

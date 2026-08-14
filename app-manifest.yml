@@ -1,10 +1,10 @@
 display_information:
-  name: Standup Bot
-  description: Modular Slack bot. Runs daily standups and files GitHub issues from threads.
-  background_color: "#2c2d30"
+  name: Wavey
+  description: Runs daily standups and files GitHub issues from threads.
+  background_color: "#fd4b2d"
 features:
   bot_user:
-    display_name: standup-bot
+    display_name: wavey
     always_online: true
   slash_commands:
     - command: /standup-setup

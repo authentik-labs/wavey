@@ -1,4 +1,4 @@
-# slackbot
+# wavey
 
 A modular Slack bot built on [Bolt for JS](https://slack.dev/bolt-js/) + Socket Mode. Ships
 with two modules:
@@ -54,11 +54,16 @@ shared infrastructure.
 3. Under **Basic Information**, copy the **Signing Secret** -> `SLACK_SIGNING_SECRET`.
 4. Under **Basic Information -> App-Level Tokens**, create a token with the `connections:write` scope -> `SLACK_APP_TOKEN` (starts with `xapp-`).
 5. Under **OAuth & Permissions**, install the app to your workspace and copy the **Bot User OAuth Token** -> `SLACK_BOT_TOKEN` (starts with `xoxb-`).
-6. Invite the bot to whichever channel you want standups posted to (e.g. `/invite @standup-bot` in `#standup`), and to any channel where people should be able to @-mention it for GitHub issues.
+6. Invite the bot to whichever channel you want standups posted to (e.g. `/invite @wavey` in `#standup`), and to any channel where people should be able to @-mention it for GitHub issues.
 
 If you're upgrading an existing install, re-import `app-manifest.yml` and reinstall the app -
 the github module needs the `app_mentions:read`, `channels:history`, `groups:history` and
 `mpim:history` scopes plus the `app_mention` event, which older installs don't have.
+
+Re-importing is also what renames the bot: an app installed before this was called *Standup Bot*
+and answered to `@standup-bot`. Until you re-import, `@wavey` won't resolve in your workspace and
+the `/invite @wavey` instructions above (and the one the bot prints itself) will point at a handle
+that doesn't exist yet.
 
 ## Running it
 
@@ -71,6 +76,49 @@ npm run build && npm start
 ```
 
 The SQLite database is created at `DB_PATH` (default `./data/bot.sqlite3`) on first run.
+
+## Deploying
+
+### Docker
+
+```bash
+docker build -t wavey .
+docker run -d --name wavey \
+  --env-file .env \
+  -v wavey-data:/data \
+  -e DB_PATH=/data/bot.sqlite3 \
+  wavey
+```
+
+The image is a two-stage Debian slim build running as the non-root `node` user. **Mount something at
+`/data`** — that's where the SQLite file lives, and without a volume the database dies with the
+container.
+
+### Kubernetes
+
+[`k8s/deployment.yaml`](./k8s/deployment.yaml) is a PersistentVolumeClaim plus a Deployment.
+There's no Service: Socket Mode dials out to Slack, so the bot listens on nothing.
+
+```bash
+kubectl create secret generic wavey \
+  --from-literal=SLACK_BOT_TOKEN=xoxb-... \
+  --from-literal=SLACK_APP_TOKEN=xapp-... \
+  --from-literal=SLACK_SIGNING_SECRET=... \
+  --from-literal=GITHUB_APP_ID=123456 \
+  --from-literal=GITHUB_DEFAULT_REPO=owner/repo
+
+# github module only
+kubectl create secret generic wavey-github-key \
+  --from-file=github-app.pem=./github-app.private-key.pem
+
+# set `image:` to your registry first
+kubectl apply -f k8s/deployment.yaml
+```
+
+**Keep `replicas: 1` and `strategy: Recreate`.** The state is a SQLite file on a ReadWriteOnce
+volume and each replica runs its own scheduler, so a second pod means two tick loops racing over
+one database — and a RollingUpdate briefly creates exactly that. The bot takes no inbound traffic,
+so the few seconds of downtime cost nothing and a missed tick is picked up by the next one.
 
 ## Using the standup module
 
@@ -87,7 +135,7 @@ Removal is soft: your timezone and send time are kept, so rejoining restores you
 than resetting them to the defaults.
 
 The bot has to be in the destination channel to read its members. `/standup-setup` joins public
-channels automatically; for a private one, `/invite @standup-bot` there and it'll pick everyone up.
+channels automatically; for a private one, `/invite @wavey` there and it'll pick everyone up.
 
 Each participant gets DM'd at their configured local time with a "Fill out
 standup" button that opens a short form (yesterday / today / blockers, the
