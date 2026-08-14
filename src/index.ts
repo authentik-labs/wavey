@@ -1,16 +1,10 @@
-// @slack/bolt is CommonJS. Older Node versions in our supported range (>=20) can't
-// statically detect its named exports from an ESM importer, so `import { App }` throws
-// at startup - only newer Node happens to get away with it. Destructuring the default
-// import works everywhere.
-import bolt from "@slack/bolt";
+import { App, LogLevel } from "@slack/bolt";
 import { loadConfig } from "./core/config.js";
 import { createLogger } from "./core/logger.js";
 import { openDatabase, runMigrations } from "./core/db.js";
 import { Scheduler } from "./core/scheduler.js";
 import type { ModuleContext } from "./core/module.js";
 import { modules } from "./modules/index.js";
-
-const { App, LogLevel } = bolt;
 
 async function main(): Promise<void> {
   const config = loadConfig();
