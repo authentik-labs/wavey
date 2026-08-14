@@ -19,7 +19,7 @@
     "@octokit/rest": "^22.0.1",
     "@slack/bolt": "^3.22.0",
     "better-sqlite3": "^13.0.3",
-    "dotenv": "^16.4.5",
+    "dotenv": "^17.4.2",
     "luxon": "^3.5.0",
     "pino": "^9.5.0",
     "pino-pretty": "^11.3.0",
