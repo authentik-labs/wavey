@@ -20,6 +20,8 @@ oauth_config:
   scopes:
     bot:
       - chat:write
+      # standup module: post each standup under the submitter's name and avatar
+      - chat:write.customize
       - commands
       - im:write
       - im:history

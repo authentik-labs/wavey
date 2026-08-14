@@ -186,15 +186,22 @@ export function buildFillOutModal(
   };
 }
 
+/**
+ * The channel post. When `asUser` is true the message already carries the person's own
+ * name and avatar, so the "<@someone>'s standup" header would just restate the author
+ * line - drop it and lead with the answers instead.
+ */
 export function buildPostedMessage(
   userId: string,
   fields: { yesterday: string; today: string; blockers: string | null },
+  asUser = false,
 ): { text: string; blocks: KnownBlock[] } {
+  const header: KnownBlock[] = asUser
+    ? []
+    : [{ type: "section", text: { type: "mrkdwn", text: `*<@${userId}>'s standup*` } }];
+
   const blocks: KnownBlock[] = [
-    {
-      type: "section",
-      text: { type: "mrkdwn", text: `*<@${userId}>'s standup*` },
-    },
+    ...header,
     {
       type: "section",
       text: { type: "mrkdwn", text: `*Yesterday:*\n${fields.yesterday}` },

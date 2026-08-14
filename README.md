@@ -58,7 +58,8 @@ shared infrastructure.
 
 If you're upgrading an existing install, re-import `app-manifest.yml` and reinstall the app -
 the github module needs the `app_mentions:read`, `channels:history`, `groups:history` and
-`mpim:history` scopes plus the `app_mention` event, which older installs don't have.
+`mpim:history` scopes plus the `app_mention` event, and the standup module needs
+`chat:write.customize` to post under each person's name, none of which older installs have.
 
 Re-importing is also what renames the bot: an app installed before this was called *Standup Bot*
 and answered to `@standup-bot`. Until you re-import, `@wavey` won't resolve in your workspace and
@@ -144,6 +145,13 @@ blockers, with the date it was from — above the fields for reference; it's rea
 so there's nothing to accidentally resubmit. Submitting posts a formatted summary to
 the configured channel. If they haven't submitted after their configured reminder delay
 (default 2 hours), they get one follow-up DM.
+
+Standups are posted **under the submitter's own name and avatar** rather than Wavey's, via the
+`chat:write.customize` scope. Slack still marks these with a small `APP` badge and the name isn't
+a clickable profile link — a bot token can't post as a real person. Doing that properly needs a
+per-user OAuth token, which would mean an OAuth redirect endpoint and therefore an inbound HTTP
+server this Socket Mode bot doesn't run. If the profile lookup fails the standup is still posted,
+just as Wavey with a `@user's standup` header.
 
 ## Using the GitHub module
 

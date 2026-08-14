@@ -48,6 +48,44 @@ async function ensureInChannel(client: SlackClient, logger: Logger, channel: str
   }
 }
 
+/**
+ * Posts a standup to the channel wearing the submitter's name and avatar rather than
+ * the bot's, via the chat:write.customize scope.
+ *
+ * This is as close to "on behalf of" as a bot token gets: Slack still marks the message
+ * with an APP badge and the name isn't a profile link. Genuinely authoring as the user
+ * would need a per-user OAuth token (xoxp-), an OAuth redirect endpoint, and therefore
+ * an HTTP server this Socket Mode bot deliberately doesn't have.
+ *
+ * If the profile lookup fails we fall back to a plain bot post with its "<@user>'s
+ * standup" header - a standup that looks wrong beats a standup that's lost.
+ */
+async function postStandupAsUser(
+  client: SlackClient,
+  logger: Logger,
+  channelId: string,
+  userId: string,
+  fields: { yesterday: string; today: string; blockers: string | null },
+): Promise<string | undefined> {
+  let identity: { username: string; icon_url?: string } | undefined;
+  try {
+    const profile = (await client.users.info({ user: userId })).user;
+    const username = profile?.profile?.display_name || profile?.real_name || profile?.name;
+    if (username) {
+      identity = { username, icon_url: profile?.profile?.image_72 };
+    }
+  } catch (err) {
+    logger.warn({ err, userId }, "could not read profile to post standup as the user");
+  }
+
+  const posted = await client.chat.postMessage({
+    channel: channelId,
+    ...buildPostedMessage(userId, fields, identity !== undefined),
+    ...identity,
+  });
+  return posted.ts;
+}
+
 type StateValues = Record<string, Record<string, { value?: string | null; selected_option?: { value: string } }>>;
 
 function textValue(values: StateValues, blockId: string): string {
@@ -120,11 +158,11 @@ export function registerActions(app: App, db: Database.Database, logger: Logger)
     const config = getConfigOrDefault(db);
     let postedTs: string | undefined;
     if (config.channel_id) {
-      const posted = await client.chat.postMessage({
-        channel: config.channel_id,
-        ...buildPostedMessage(entry.user_id, { yesterday, today, blockers }),
+      postedTs = await postStandupAsUser(client, logger, config.channel_id, entry.user_id, {
+        yesterday,
+        today,
+        blockers,
       });
-      postedTs = posted.ts;
     } else {
       logger.warn("standup submitted but no destination channel is configured yet (run /standup-setup)");
     }
