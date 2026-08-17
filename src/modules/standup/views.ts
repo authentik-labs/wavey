@@ -308,6 +308,10 @@ export function buildTimeModal(current: StandupUserRow): View {
           action_id: "value",
           initial_value: current.timezone,
         },
+        // A prefilled value nobody typed looks arbitrary unless we say where it came from.
+        ...(current.timezone_source === "slack"
+          ? { hint: { type: "plain_text" as const, text: "Picked up from your Slack profile." } }
+          : {}),
       },
       {
         type: "input",

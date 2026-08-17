@@ -124,7 +124,7 @@ so the few seconds of downtime cost nothing and a missed tick is picked up by th
 ## Using the standup module
 
 - `/standup-setup` (workspace admins) - pick the destination channel, default timezone, default send time, default reminder delay, and whether to skip weekends.
-- `/standup-time` (participants) - set your own timezone / send time / reminder delay.
+- `/standup-time` (participants) - set your own timezone / send time / reminder delay. Setting a timezone here pins it: nothing overwrites it afterwards.
 - `/standup-now` (anyone) - fill out today's standup immediately, without waiting for your scheduled prompt.
 
 **Membership of the destination channel is the participant list.** Joining it enrols you (with a
@@ -134,6 +134,13 @@ downtime. Leaving the channel is also how you opt out.
 
 Removal is soft: your timezone and send time are kept, so rejoining restores your settings rather
 than resetting them to the defaults.
+
+**Your timezone comes from your Slack profile.** Enrolling reads it off the same `users.info` call
+that decides whether you're a real person, so a new participant gets prompted at a sensible local
+hour without touching a thing — and anyone already enrolled on an inherited timezone picks theirs up
+on the next 15-minute sweep. The `/standup-setup` default only applies when Slack has no timezone
+for you. Run `/standup-time` to override it; once you do, that choice is permanent and the profile
+is never read for you again. (No extra OAuth scope — `users:read` already returns `tz`.)
 
 The bot has to be in the destination channel to read its members. `/standup-setup` joins public
 channels automatically; for a private one, `/invite @wavey` there and it'll pick everyone up.

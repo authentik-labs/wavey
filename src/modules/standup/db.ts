@@ -50,6 +50,13 @@ export const migrations: Migration[] = [
     name: "standup.002_membership",
     sql: `ALTER TABLE standup_users RENAME COLUMN enabled TO in_channel;`,
   },
+  {
+    // Lets the Slack-profile backfill tell "nobody ever chose this timezone" from "the
+    // user typed exactly this". Existing rows are 'default' by construction, which is
+    // precisely the set the backfill is allowed to touch.
+    name: "standup.003_timezone_source",
+    sql: `ALTER TABLE standup_users ADD COLUMN timezone_source TEXT NOT NULL DEFAULT 'default';`,
+  },
 ];
 
 export function getConfig(db: Database.Database): StandupConfigRow | undefined {
@@ -111,6 +118,9 @@ export function listInChannelUserIds(db: Database.Database): string[] {
  * many join events and reconciles race each other, exactly one of them sends the
  * welcome DM. Same claim shape as claimEntry below.
  *
+ * `profileTimezone` is their Slack profile's zone when we have a valid one; it beats
+ * the workspace default because it's about this person rather than about the team.
+ *
  * The DO UPDATE deliberately touches only in_channel: a rejoin must not reset the
  * timezone and send time the person picked last time round.
  */
@@ -118,11 +128,12 @@ export function claimJoin(
   db: Database.Database,
   userId: string,
   defaults: Omit<StandupConfigRow, "id" | "channel_id" | "updated_at">,
+  profileTimezone?: string,
 ): boolean {
   const result = db
     .prepare(
-      `INSERT INTO standup_users (user_id, timezone, send_time, reminder_minutes, in_channel, updated_at)
-       VALUES (@user_id, @timezone, @send_time, @reminder_minutes, 1, @updated_at)
+      `INSERT INTO standup_users (user_id, timezone, timezone_source, send_time, reminder_minutes, in_channel, updated_at)
+       VALUES (@user_id, @timezone, @timezone_source, @send_time, @reminder_minutes, 1, @updated_at)
        ON CONFLICT (user_id) DO UPDATE SET
          in_channel = 1,
          updated_at = excluded.updated_at
@@ -130,12 +141,40 @@ export function claimJoin(
     )
     .run({
       user_id: userId,
-      timezone: defaults.default_timezone,
+      timezone: profileTimezone ?? defaults.default_timezone,
+      timezone_source: profileTimezone ? "slack" : "default",
       send_time: defaults.default_send_time,
       reminder_minutes: defaults.default_reminder_minutes,
       updated_at: new Date().toISOString(),
     });
   return result.changes === 1;
+}
+
+/**
+ * Adopts a Slack profile's timezone for someone who never chose one. The WHERE clause is
+ * the entire safety argument - a row that reached 'slack' or 'user' is left alone - so it
+ * stays in the statement rather than becoming a read-then-write the sweep could race.
+ *
+ * Returns true only when a row actually changed, which also makes this self-extinguishing:
+ * one successful adopt takes the user out of listUserIdsNeedingTimezone for good.
+ */
+export function adoptProfileTimezone(db: Database.Database, userId: string, timezone: string): boolean {
+  const result = db
+    .prepare(
+      `UPDATE standup_users
+       SET timezone = ?, timezone_source = 'slack', updated_at = ?
+       WHERE user_id = ? AND timezone_source = 'default'`,
+    )
+    .run(timezone, new Date().toISOString(), userId);
+  return result.changes === 1;
+}
+
+/** Participants still on an inherited timezone - the backfill's work list. */
+export function listUserIdsNeedingTimezone(db: Database.Database): string[] {
+  const rows = db
+    .prepare("SELECT user_id FROM standup_users WHERE in_channel = 1 AND timezone_source = 'default'")
+    .all() as { user_id: string }[];
+  return rows.map((row) => row.user_id);
 }
 
 /**
@@ -160,6 +199,7 @@ export function upsertUser(
     ({
       user_id: userId,
       timezone: defaults.default_timezone,
+      timezone_source: "default",
       send_time: defaults.default_send_time,
       reminder_minutes: defaults.default_reminder_minutes,
       // Only claimJoin grants membership. A row born here - someone saving their
@@ -171,10 +211,11 @@ export function upsertUser(
     } as StandupUserRow);
   const next: StandupUserRow = { ...current, ...patch, user_id: userId, updated_at: new Date().toISOString() };
   db.prepare(
-    `INSERT INTO standup_users (user_id, timezone, send_time, reminder_minutes, in_channel, updated_at)
-     VALUES (@user_id, @timezone, @send_time, @reminder_minutes, @in_channel, @updated_at)
+    `INSERT INTO standup_users (user_id, timezone, timezone_source, send_time, reminder_minutes, in_channel, updated_at)
+     VALUES (@user_id, @timezone, @timezone_source, @send_time, @reminder_minutes, @in_channel, @updated_at)
      ON CONFLICT (user_id) DO UPDATE SET
        timezone = excluded.timezone,
+       timezone_source = excluded.timezone_source,
        send_time = excluded.send_time,
        reminder_minutes = excluded.reminder_minutes,
        in_channel = excluded.in_channel,

@@ -1,7 +1,17 @@
 import type { App } from "@slack/bolt";
 import type Database from "better-sqlite3";
 import type { Logger } from "../../core/logger.js";
-import { claimJoin, getConfig, getConfigOrDefault, listInChannelUserIds, markLeft } from "./db.js";
+import {
+  adoptProfileTimezone,
+  claimJoin,
+  getConfig,
+  getConfigOrDefault,
+  getUser,
+  listInChannelUserIds,
+  listUserIdsNeedingTimezone,
+  markLeft,
+} from "./db.js";
+import { validateTimezone } from "./commands.js";
 import type { StandupConfigRow } from "./types.js";
 
 type SlackClient = App["client"];
@@ -25,6 +35,12 @@ const WELCOME_DM_LIMIT = 20;
  * a restart just costs one extra lookup per non-human.
  */
 const knownNonHumans = new Set<string>();
+/**
+ * People Slack has no usable timezone for. Without this the backfill below would spend a
+ * users.info on them every single sweep, forever - their row can never leave its work list.
+ * Same in-memory tradeoff as knownNonHumans: a restart costs one extra lookup each.
+ */
+const knownWithoutProfileTimezone = new Set<string>();
 let lastReconcileAt = 0;
 /** Lets a destination-channel switch reconcile immediately instead of waiting out the throttle. */
 let lastChannelId: string | undefined;
@@ -35,21 +51,33 @@ export async function botUserId(client: SlackClient): Promise<string | undefined
   return cachedBotUserId;
 }
 
-/** True for real people we should enrol. Caches the negatives. */
-async function isHuman(client: SlackClient, logger: Logger, userId: string): Promise<boolean> {
-  if (knownNonHumans.has(userId)) return false;
+/** What we take off a real person's Slack profile to seed their defaults. */
+interface HumanProfile {
+  /** Their Slack timezone, absent when Slack has none or hands us a zone Luxon rejects. */
+  timezone?: string;
+}
+
+/**
+ * The profile of a real person we should enrol, or undefined for bots, apps, deactivated
+ * accounts and failed lookups. Caches the negatives.
+ */
+async function lookupHuman(client: SlackClient, logger: Logger, userId: string): Promise<HumanProfile | undefined> {
+  if (knownNonHumans.has(userId)) return undefined;
   try {
     const user = (await client.users.info({ user: userId })).user;
     if (!user || user.is_bot || user.deleted || user.is_app_user) {
       knownNonHumans.add(userId);
-      return false;
+      return undefined;
     }
-    return true;
+    // Some accounts have no tz at all, and an unvalidated one would turn every
+    // localDate/localHHmm call for this person into an Invalid DateTime.
+    const tz = user.tz;
+    return { timezone: tz && validateTimezone(tz) ? tz : undefined };
   } catch (err) {
     // Don't cache a failure as "not human" - a transient error would exclude a real
     // person until the next restart. Skip them this round and retry next sweep.
     logger.warn({ err, userId }, "could not look up user, skipping this round");
-    return false;
+    return undefined;
   }
 }
 
@@ -66,18 +94,45 @@ async function fetchChannelMembers(client: SlackClient, channel: string): Promis
   return members;
 }
 
-function welcomeText(config: StandupConfigRow): string {
-  return `You've been enrolled in daily standups :wave: I'll DM you at ${config.default_send_time} (${config.default_timezone}) each weekday. Run /standup-time anytime to change your schedule.`;
+/** A user who just became a participant, as their row actually reads. */
+interface Enrolment {
+  userId: string;
+  timezone: string;
+  sendTime: string;
+  /** Whether that timezone came from their Slack profile rather than being inherited or chosen. */
+  fromProfile: boolean;
 }
 
-async function sendWelcomeDm(client: SlackClient, logger: Logger, userId: string, config: StandupConfigRow) {
+/**
+ * Describes the row claimJoin left behind, which for a rejoin is the one from last time
+ * rather than anything we just passed in - so the welcome DM promises what the scheduler
+ * will actually do.
+ */
+function describeEnrolment(db: Database.Database, userId: string, config: StandupConfigRow): Enrolment {
+  const row = getUser(db, userId);
+  return {
+    userId,
+    timezone: row?.timezone ?? config.default_timezone,
+    sendTime: row?.send_time ?? config.default_send_time,
+    fromProfile: row?.timezone_source === "slack",
+  };
+}
+
+function welcomeText(enrolment: Enrolment): string {
+  // Naming where the timezone came from is what makes a wrong one actionable rather
+  // than mysterious.
+  const origin = enrolment.fromProfile ? ", from your Slack profile" : "";
+  return `You've been enrolled in daily standups :wave: I'll DM you at ${enrolment.sendTime} (${enrolment.timezone}${origin}) each weekday. Run /standup-time anytime to change your schedule.`;
+}
+
+async function sendWelcomeDm(client: SlackClient, logger: Logger, enrolment: Enrolment) {
   try {
-    const dm = await client.conversations.open({ users: userId });
+    const dm = await client.conversations.open({ users: enrolment.userId });
     const channel = dm.channel?.id;
     if (!channel) return;
-    await client.chat.postMessage({ channel, text: welcomeText(config) });
+    await client.chat.postMessage({ channel, text: welcomeText(enrolment) });
   } catch (err) {
-    logger.warn({ err, userId }, "failed to send standup welcome DM");
+    logger.warn({ err, userId: enrolment.userId }, "failed to send standup welcome DM");
   }
 }
 
@@ -125,11 +180,17 @@ export async function syncMembership(app: App, db: Database.Database, logger: Lo
   const memberIds = new Set(members.filter((id) => id !== selfId));
   const alreadyIn = new Set(listInChannelUserIds(db));
 
-  const newlyEnrolled: string[] = [];
+  const newlyEnrolled: Enrolment[] = [];
   for (const userId of memberIds) {
     if (alreadyIn.has(userId)) continue;
-    if (!(await isHuman(client, logger, userId))) continue;
-    if (claimJoin(db, userId, config)) newlyEnrolled.push(userId);
+    const profile = await lookupHuman(client, logger, userId);
+    if (!profile) continue;
+    // Record the miss here too, so the backfill below doesn't immediately spend a second
+    // lookup on someone we've just learned has no timezone.
+    if (!profile.timezone) knownWithoutProfileTimezone.add(userId);
+    if (claimJoin(db, userId, config, profile.timezone)) {
+      newlyEnrolled.push(describeEnrolment(db, userId, config));
+    }
   }
 
   let removed = 0;
@@ -138,16 +199,31 @@ export async function syncMembership(app: App, db: Database.Database, logger: Lo
     if (markLeft(db, userId)) removed++;
   }
 
+  // Participants still on an inherited timezone - including everyone enrolled before we
+  // started reading it from Slack. Costs one users.info each, but a hit moves the row to
+  // 'slack' permanently, so the work list empties out and stays empty.
+  let adopted = 0;
+  for (const userId of listUserIdsNeedingTimezone(db)) {
+    if (knownWithoutProfileTimezone.has(userId)) continue;
+    const profile = await lookupHuman(client, logger, userId);
+    if (!profile) continue; // lookup failed - retry next sweep rather than remember a guess
+    if (!profile.timezone) {
+      knownWithoutProfileTimezone.add(userId);
+      continue;
+    }
+    if (adoptProfileTimezone(db, userId, profile.timezone)) adopted++;
+  }
+
   await announceEnrollment(client, logger, newlyEnrolled, config, channel);
 
-  logger.info({ channel, enrolled: newlyEnrolled.length, removed }, "reconciled standup membership");
+  logger.info({ channel, enrolled: newlyEnrolled.length, removed, adopted }, "reconciled standup membership");
   return { enrolled: newlyEnrolled.length, removed };
 }
 
 async function announceEnrollment(
   client: SlackClient,
   logger: Logger,
-  newlyEnrolled: string[],
+  newlyEnrolled: Enrolment[],
   config: StandupConfigRow,
   channel: string,
 ): Promise<void> {
@@ -155,15 +231,17 @@ async function announceEnrollment(
 
   if (newlyEnrolled.length > WELCOME_DM_LIMIT) {
     logger.info({ count: newlyEnrolled.length }, "too many new participants for individual DMs, posting in channel");
+    // One message for everyone can't name a single zone, so describe where it comes from
+    // instead of quoting the workspace default at people who won't be using it.
     await client.chat.postMessage({
       channel,
-      text: `:wave: I'll be running daily standups here - ${newlyEnrolled.length} people enrolled. I'll DM you at ${config.default_send_time} (${config.default_timezone}) each weekday; run \`/standup-time\` to set your own schedule.`,
+      text: `:wave: I'll be running daily standups here - ${newlyEnrolled.length} people enrolled. I'll DM you at ${config.default_send_time} in your own timezone (taken from your Slack profile) each weekday; run \`/standup-time\` to set your own schedule.`,
     });
     return;
   }
 
-  for (const userId of newlyEnrolled) {
-    await sendWelcomeDm(client, logger, userId, config);
+  for (const enrolment of newlyEnrolled) {
+    await sendWelcomeDm(client, logger, enrolment);
   }
 }
 
@@ -192,13 +270,16 @@ export async function enrollUser(
 ): Promise<void> {
   const client = app.client;
   const config = getConfigOrDefault(db);
-  if (!(await isHuman(client, logger, userId))) return;
+  const profile = await lookupHuman(client, logger, userId);
+  if (!profile) return;
+  if (!profile.timezone) knownWithoutProfileTimezone.add(userId);
 
   // Bolt handles events concurrently, and a join can land while a reconcile is
   // mid-sweep - the claim is what keeps that to one welcome DM.
-  if (!claimJoin(db, userId, config)) return;
-  logger.info({ userId }, "enrolled user in standups");
-  await sendWelcomeDm(client, logger, userId, config);
+  if (!claimJoin(db, userId, config, profile.timezone)) return;
+  const enrolment = describeEnrolment(db, userId, config);
+  logger.info({ userId, timezone: enrolment.timezone }, "enrolled user in standups");
+  await sendWelcomeDm(client, logger, enrolment);
 }
 
 /** Single-user removal, used by member_left_channel. Soft - settings are kept. */

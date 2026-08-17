@@ -243,7 +243,14 @@ export function registerActions(app: App, db: Database.Database, logger: Logger)
     await ack();
 
     const config = getConfigOrDefault(db);
-    upsertUser(db, body.user.id, { timezone, send_time: sendTime, reminder_minutes: reminderMinutes }, config);
+    // timezone_source: an explicit choice outranks the Slack profile from here on, so the
+    // membership sweep's backfill will leave this row alone.
+    upsertUser(
+      db,
+      body.user.id,
+      { timezone, timezone_source: "user", send_time: sendTime, reminder_minutes: reminderMinutes },
+      config,
+    );
 
     await client.chat.postMessage({
       channel: body.user.id,
