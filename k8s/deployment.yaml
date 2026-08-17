@@ -55,7 +55,7 @@ spec:
           imagePullPolicy: IfNotPresent
           envFrom:
             - secretRef:
-                name: wavey
+                name: wavey-slack
           env:
             - name: DB_PATH
               value: /data/bot.sqlite3
